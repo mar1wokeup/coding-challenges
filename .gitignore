@@ -1,11 +1,13 @@
-*/target/
-
 .DS_Store
 
 .prettierrc
 
-*/tests/
+*/test*
 
 */todo/
 
 */Cargo.*
+
+*/target*
+
+*/out*
