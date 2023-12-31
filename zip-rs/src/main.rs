@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::str;
 use std::env;
 use std::fs;
 use std::process;
@@ -10,10 +11,11 @@ use std::io::Read;
 use std::fs::File;
 use std::io::{ self, BufReader, BufWriter };
 use std::ptr::read;
+use rayon::prelude::*;
 
 #[derive(Eq)]
 struct TreeNode {
-    character: Option<char>,
+    character: Option<u8>,
     frequency: u32,
     left: Option<Box<TreeNode>>,
     right: Option<Box<TreeNode>>,
@@ -74,11 +76,11 @@ fn main() -> io::Result<()> {
 }
 
 fn encode_file(input_file: File, output_file: &mut File) -> io::Result<()> {
-    let mut content = String::new();
+    let mut content = Vec::new();
     let mut reader = BufReader::new(&input_file);
-    reader.read_to_string(&mut content)?;
+    reader.read_to_end(&mut content)?;
 
-    let freq_table = calculate_frequency(&content);
+    let freq_table = calculate_frequency_parallel(&content);
     let huffman_tree = build_huffman_tree(&freq_table).ok_or_else(||
         io::Error::new(io::ErrorKind::Other, "failed to build huffman tree")
     )?;
@@ -109,7 +111,25 @@ fn calculate_frequency(content: &str) -> HashMap<char, u32> {
     freq_table
 }
 
-fn build_huffman_tree(freq_table: &HashMap<char, u32>) -> Option<Box<TreeNode>> {
+fn calculate_frequency_parallel(content: &[u8]) -> HashMap<u8, u32> {
+    let chunk_size = content.len() / rayon::current_num_threads();
+    content
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut freq_table = HashMap::new();
+            for &byte in chunk {
+                *freq_table.entry(byte).or_insert(0) += 1;
+            }
+            freq_table
+        })
+        .reduce(HashMap::new, |mut acc, freqs| {
+            for (&byte, &count) in freqs.iter() {
+                *acc.entry(byte).or_insert(0) += count;
+            }
+            acc
+        })
+}
+fn build_huffman_tree(freq_table: &HashMap<u8, u32>) -> Option<Box<TreeNode>> {
     let mut priority_queue = BinaryHeap::new();
 
     for (&character, &frequency) in freq_table {
@@ -143,7 +163,7 @@ fn generate_codes(
 ) {
     if let Some(node) = node {
         if let Some(character) = node.character {
-            code_table.insert(character, prefix);
+            code_table.insert(character as char, prefix);
         } else {
             generate_codes(&node.left, prefix.clone() + "0", code_table);
             generate_codes(&node.right, prefix.clone() + "1", code_table);
@@ -151,8 +171,9 @@ fn generate_codes(
     }
 }
 ////////////////
-fn write_header<W: Write>(writer: &mut W, freq_table: &HashMap<char, u32>) -> std::io::Result<()> {
-    for (character, frequency) in freq_table {
+fn write_header<W: Write>(writer: &mut W, freq_table: &HashMap<u8, u32>) -> std::io::Result<()> {
+    for (&byte, &frequency) in freq_table {
+        let character = byte as char;
         writeln!(writer, "{}:{}", character.escape_default(), frequency)?;
     }
     writeln!(writer, "---")
@@ -160,19 +181,16 @@ fn write_header<W: Write>(writer: &mut W, freq_table: &HashMap<char, u32>) -> st
 
 fn encode_and_write_data<W: Write>(
     writer: &mut W,
-    text: &str,
+    data: &[u8],
     huffman_codes: &HashMap<char, String>
 ) -> std::io::Result<()> {
     let mut bit_string = String::new();
-    for character in text.chars() {
-        if let Some(code) = huffman_codes.get(&character) {
+    for &byte in data {
+        if let Some(code) = huffman_codes.get(&(byte as char)) {
             bit_string.push_str(code);
         } else {
             return Err(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "invalid character in input text"
-                )
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid byte in input data")
             );
         }
     }
@@ -192,17 +210,16 @@ fn encode_and_write_data<W: Write>(
     Ok(())
 }
 ////////////////
-fn read_header<R: BufRead>(reader: &mut R) -> std::io::Result<HashMap<char, u32>> {
+fn read_header<R: BufRead>(reader: &mut R) -> std::io::Result<HashMap<u8, u32>> {
     let mut freq_table = HashMap::new();
 
-    let reader = std::io::BufReader::new(reader);
     for line in reader.lines() {
         let line = line?;
         if line == "---" {
             break;
         }
         let parts: Vec<&str> = line.split(':').collect();
-        let character = parts[0].chars().next().unwrap();
+        let character = parts[0].chars().next().unwrap() as u8; // Cast char to u8
         let frequency = parts[1].parse::<u32>().unwrap();
         freq_table.insert(character, frequency);
     }
@@ -229,7 +246,7 @@ fn decode_and_write_output<R: BufRead>(
             };
             bits <<= 1;
             if node.character.is_some() {
-                decoded_string.push(node.character.unwrap());
+                decoded_string.push(node.character.unwrap() as char);
                 node = huffman_tree.as_ref();
             }
         }
@@ -265,7 +282,7 @@ mod tests {
             process::exit(1);
         });
 
-        let freq_table = calculate_frequency(&content);
+        let freq_table = calculate_frequency_parallel(&content.as_bytes());
         let huffman_tree = build_huffman_tree(&freq_table).unwrap();
         let mut huffman_codes = HashMap::new();
         generate_codes(&Some(huffman_tree), String::new(), &mut huffman_codes);
@@ -281,8 +298,8 @@ mod tests {
     fn test_header_format() {
         let mut output = Vec::new();
         let freq_table = HashMap::from([
-            ('a', 1),
-            ('b', 2),
+            (b'a', 1),
+            (b'b', 2),
         ]);
         write_header(&mut output, &freq_table).unwrap();
         let output_str = String::from_utf8(output).unwrap();
@@ -298,7 +315,7 @@ mod tests {
             ('a', "0".to_string()),
             ('b', "1".to_string()),
         ]);
-        encode_and_write_data(&mut output, "abba", &huffman_codes).unwrap();
+        encode_and_write_data(&mut output, b"abba", &huffman_codes).unwrap();
         assert_eq!(output, vec![0b01011000]);
     }
 }
