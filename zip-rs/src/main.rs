@@ -1,16 +1,12 @@
-use std::collections::HashMap;
-use std::str;
-use std::env;
-use std::fs;
-use std::process;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
-use std::io::Write;
-use std::io::BufRead;
-use std::io::Read;
-use std::fs::File;
-use std::io::{ self, BufReader, BufWriter };
-use std::ptr::read;
+use std::{
+    collections::{ BinaryHeap, HashMap },
+    cmp::Ordering,
+    env,
+    fs::{ self, File },
+    io::{ self, BufRead, BufReader, BufWriter, Read, Write },
+    process,
+    str,
+};
 use rayon::prelude::*;
 
 #[derive(Eq)]
