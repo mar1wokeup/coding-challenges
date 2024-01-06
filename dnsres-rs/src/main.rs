@@ -2,6 +2,8 @@ use byteorder::{ BigEndian, WriteBytesExt };
 use std::net::UdpSocket;
 use rand;
 
+const DNS_ADDR: &str = "8.8.8.8";
+const DNS_PORT: u16 = 53;
 struct Header {
     id: u16,
     flags: u16,
@@ -18,7 +20,7 @@ struct Question {
 }
 
 impl Header {
-    fn to_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn to_bytes(&self) -> Result<Vec<u8>, std::io::Error> {
         let mut bytes = vec![];
         bytes.write_u16::<BigEndian>(self.id)?;
         bytes.write_u16::<BigEndian>(self.flags)?;
@@ -30,7 +32,7 @@ impl Header {
     }
 }
 impl Question {
-    fn to_bytes(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    fn to_bytes(&self) -> Result<Vec<u8>, std::io::Error> {
         let mut bytes = vec![];
         for part in self.qname.split('.') {
             bytes.push(part.len() as u8);
@@ -62,28 +64,34 @@ fn main() {
     };
 
     // convert
+    let message = match construct(header, question) {
+        Ok(message) => message,
+        Err(e) => {
+            return;
+        }
+    };
+
+    send(&message, DNS_ADDR, DNS_PORT);
+}
+
+fn construct(header: Header, question: Question) -> Result<Vec<u8>, std::io::Error> {
     let header_bytes = match header.to_bytes() {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("Failed to convert header to bytes: {}", e);
-            return;
+            return Err(e);
         }
     };
     let question_bytes = match question.to_bytes() {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("Failed to convert question to bytes: {}", e);
-            return;
+            return Err(e);
         }
     };
-
-    // combine
     let mut message = header_bytes;
     message.extend(question_bytes);
-
-    let address = "8.8.8.8";
-    let port = 53;
-    send(&message, address, port);
+    Ok(message)
 }
 
 fn send(message: &[u8], address: &str, port: u16) {
